@@ -40,12 +40,14 @@ section[data-testid="stSidebar"] * {{ color:#E2E8F0; }}
 section[data-testid="stSidebar"] input, section[data-testid="stSidebar"] textarea,
 section[data-testid="stSidebar"] [data-baseweb="select"] * {{ color:{NAVY} !important; }}
 h1,h2,h3,h4 {{ color:{NAVY}; letter-spacing:-0.02em; }}
+section[data-testid="stSidebar"] button {{ background:{SKY}; border:none; }}
+section[data-testid="stSidebar"] button, section[data-testid="stSidebar"] button * {{ color:{NAVY} !important; font-weight:700; }}
 div[data-testid="stRadio"] > div[role="radiogroup"] {{ gap:0.4rem; flex-wrap:wrap; }}
-div[data-testid="stRadio"] label {{ background:#fff; border:1px solid {GRAY}; border-radius:999px;
+div[data-testid="stRadio"] [role="radiogroup"] label {{ background:#fff; border:1px solid {GRAY}; border-radius:999px;
     padding:0.25rem 0.9rem; }}
-div[data-testid="stRadio"] label:has(input:checked) {{ background:{NAVY}; border-color:{NAVY}; }}
-div[data-testid="stRadio"] label:has(input:checked) * {{ color:#fff !important; }}
-div[data-testid="stRadio"] label > div:first-child {{ display:none; }}
+div[data-testid="stRadio"] [role="radiogroup"] label:has(input:checked) {{ background:{NAVY}; border-color:{NAVY}; }}
+div[data-testid="stRadio"] [role="radiogroup"] label:has(input:checked) * {{ color:#fff !important; }}
+div[data-testid="stRadio"] [role="radiogroup"] label > div:first-child {{ display:none; }}
 .stButton > button {{ border-radius:10px; border:1px solid {NAVY}; background:#fff; color:{NAVY}; font-weight:600; }}
 .stButton > button:hover {{ background:{SKY}; border-color:{SKY}; color:{NAVY}; }}
 .stButton > button[kind="primary"] {{ background:{NAVY}; color:#fff; }}
@@ -87,33 +89,52 @@ CATS = ["전체", "교내", "지자체", "교외", "근로"]
 INCOME_OPTIONS = list(range(0, 11))  # 0~10구간
 
 
-def _s(i, name, cat, kind, amount, offset, gpa, income, region, years, kw, url):
+def income_label(n):
+    return "기초·차상위" if n == 0 else f"{n}구간"
+
+
+def _s(i, name, cat, kind, amount, deadline, gpa, income, region, years, kw, url):
+    """공고명, 카테고리, 지원유형, 지원금액, 마감일(YYYY-MM-DD), 최소학점, 소득분위 상한(0=기초·차상위),
+    거주지 요건(None=무관)/최소 거주기간, 적합도·검색용 키워드, 링크"""
     return dict(id=i, name=name, cat=cat, kind=kind, amount=amount,
-                deadline=TODAY + timedelta(days=offset), min_gpa=gpa, max_income=income,
+                deadline=date.fromisoformat(deadline), min_gpa=gpa, max_income=income,
                 region=region, min_years=years, keywords=kw, url=url)
 
 
+# ※ 시연용 예시 데이터: 기관명은 실제 사례를 참고했으나 마감일·금액·자격요건은 가상의 값입니다.
 SCHOLARSHIPS = [
-    _s(1, "교내 성적우수장학금", "교내", "등록금성", 2_000_000, 12, 3.5, 10, None, 0,
-       ["학업 성취", "꾸준함", "자기주도 학습"], "https://example.ac.kr/s1"),
-    _s(2, "교내 소득연계 희망장학금", "교내", "등록금성", 1_500_000, 3, 3.0, 5, None, 0,
-       ["성장 의지", "책임감", "나눔"], "https://example.ac.kr/s2"),
-    _s(3, "용인시 인재육성장학금", "지자체", "등록금성", 1_000_000, 6, 3.0, 10, "용인시", 2,
-       ["지역 기여", "리더십", "성실성"], "https://example.go.kr/s3"),
-    _s(4, "경기도 청년 생활안정 장학금", "지자체", "생활비성", 1_200_000, 20, 2.5, 6, "경기도", 1,
-       ["자립", "생활 계획", "성장 스토리"], "https://example.go.kr/s4"),
-    _s(5, "미래인재재단 글로벌 장학금", "교외", "등록금성", 4_000_000, 35, 4.0, 4, None, 0,
-       ["글로벌 역량", "도전", "비전"], "https://example.org/s5"),
-    _s(6, "교내 근로장학생", "근로", "근로성", 600_000, 0, 2.5, 10, None, 0,
-       ["성실", "협업", "책임감"], "https://example.ac.kr/s6"),
-    _s(7, "지역사회공헌 생활비 지원", "교외", "생활비성", 800_000, 9, 3.0, 8, None, 0,
-       ["사회공헌", "봉사 경험", "공동체"], "https://example.org/s7"),
-    _s(8, "공공기관 서포터즈 근로장학", "근로", "근로성", 900_000, 45, 3.0, 10, None, 0,
-       ["커뮤니케이션", "기획력", "실행력"], "https://example.go.kr/s8"),
-    _s(9, "서울시 인재장학금", "지자체", "등록금성", 2_000_000, 5, 3.3, 7, "서울", 1,
-       ["지역 이해", "공익", "리더십"], "https://example.go.kr/s9"),
-    _s(10, "해외 어학연수 생활비 지원", "교외", "생활비성", 1_500_000, 60, 3.8, 7, None, 0,
-       ["어학 역량", "목표 의식", "국제 감각"], "https://example.org/s10"),
+    _s(1, "교내 성적우수장학금", "교내", "등록금성", 2_000_000, "2026-11-27", 3.5, 10, None, 0,
+       ["성적", "학업 성취", "꾸준함"], "https://example.ac.kr/s1"),
+    _s(2, "교내 근로장학생", "근로", "생활비성", 600_000, "2026-11-03", 2.5, 10, None, 0,
+       ["근로", "성실", "협업"], "https://example.ac.kr/s2"),
+    _s(3, "용인시 인재육성재단 장학금", "지자체", "등록금성", 1_500_000, "2026-11-06", 3.0, 10, "용인시", 2,
+       ["용인", "지역 기여", "리더십"], "https://example.go.kr/s3"),
+    _s(4, "경기도 대학생 생활비 지원 장학금", "지자체", "생활비성", 1_200_000, "2026-11-20", 2.5, 6, "경기도", 1,
+       ["경기도", "생활비", "자립"], "https://example.go.kr/s4"),
+    _s(5, "서울장학재단 대학생 장학금", "지자체", "등록금성", 2_000_000, "2026-11-13", 3.0, 7, "서울", 1,
+       ["서울", "지역 이해", "공익"], "https://example.go.kr/s5"),
+    _s(6, "한국장학재단 푸른등대 기부장학금", "교외", "생활비성", 1_000_000, "2026-12-04", 3.0, 8, None, 0,
+       ["기부", "나눔", "성장 스토리"], "https://example.org/s6"),
+    _s(7, "현대차정몽구재단 온드림 장학금", "교외", "등록금성", 4_000_000, "2026-11-30", 3.0, 3, None, 0,
+       ["온드림", "도전", "비전"], "https://example.org/s7"),
+    _s(8, "삼성꿈장학재단 대학희망장학금", "교외", "생활비성", 1_500_000, "2026-12-11", 3.0, 4, None, 0,
+       ["희망", "꿈", "성장 의지"], "https://example.org/s8"),
+    _s(9, "OK배정장학재단 OK배정장학생", "교외", "생활비성", 2_400_000, "2026-12-18", 3.5, 8, None, 0,
+       ["OK배정", "인성", "봉사 경험"], "https://example.org/s9"),
+    _s(10, "MBK장학재단 주거비 지원 장학금", "교외", "생활비성", 1_800_000, "2026-11-24", 3.0, 5, None, 0,
+       ["주거비", "MBK", "자립"], "https://example.org/s10"),
+    _s(11, "교내 저소득층 복지장학금", "교내", "등록금성", 3_000_000, "2026-11-10", 2.0, 3, None, 0,
+       ["복지", "저소득", "성실성"], "https://example.ac.kr/s11"),
+    _s(12, "교내 글로벌리더십 해외탐방 장학금", "교내", "생활비성", 1_500_000, "2026-12-02", 3.5, 10, None, 0,
+       ["글로벌", "해외탐방", "리더십"], "https://example.ac.kr/s12"),
+    _s(13, "성남시 주거·생활비 지원 장학금", "지자체", "생활비성", 1_000_000, "2026-11-17", 2.5, 6, "성남시", 1,
+       ["성남", "주거", "생활비"], "https://example.go.kr/s13"),
+    _s(14, "롯데장학재단 희망장학생", "교외", "등록금성", 2_000_000, "2026-12-23", 3.0, 5, None, 0,
+       ["롯데", "희망", "책임감"], "https://example.org/s14"),
+    _s(15, "교내 입학성적 우수 장학금", "교내", "등록금성", 2_000_000, "2026-12-09", 3.0, 10, None, 0,
+       ["입학성적", "우수", "성적"], "https://example.ac.kr/s15"),
+    _s(16, "공공기관 서포터즈 근로장학", "근로", "생활비성", 900_000, "2026-12-15", 3.0, 10, None, 0,
+       ["근로", "커뮤니케이션", "기획력"], "https://example.go.kr/s16"),
 ]
 SCH_BY_ID = {s["id"]: s for s in SCHOLARSHIPS}
 
@@ -122,7 +143,7 @@ def init_state():
     ss = st.session_state
     ss.setdefault("profile", dict(name="이OO", univ="한국외국어대학교", gpa=3.8, income=9,
                                   region="경기도 용인시", region_years=2, tuition=4_000_000))
-    ss.setdefault("apps", {1: {"status": "준비 중"}, 6: {"status": "지원 완료"}})
+    ss.setdefault("apps", {1: {"status": "준비 중"}, 2: {"status": "지원 완료"}})
     ss.setdefault("posts", [
         dict(id=3, title="근로장학 면접 후기", author="김OO", cat="후기",
              content="질문은 근무 가능 시간과 협업 경험 위주였어요. 시간표를 미리 정리해 가면 좋습니다.",
@@ -162,7 +183,7 @@ def evaluate(s, p):
     else:
         reg_ok = s["region"] in p["region"] and p["region_years"] >= s["min_years"]
     reasons.append(("학점", gpa_ok, f"{p['gpa']:.1f} / 기준 {s['min_gpa']:.1f}↑"))
-    reasons.append(("소득", inc_ok, f"{p['income']}구간 / 기준 {s['max_income']}구간↓"))
+    reasons.append(("소득", inc_ok, f"{income_label(p['income'])} / 기준 {income_label(s['max_income'])}↓"))
     if s["region"]:
         reasons.append(("거주지", reg_ok, f"{s['region']} {s['min_years']}년↑"))
     ok = gpa_ok and inc_ok and reg_ok
@@ -279,7 +300,7 @@ with st.sidebar:
         f"""
 **{p['name']}** · {p['univ']}  
 - 학점 **{p['gpa']:.1f} / 4.5**
-- 소득분위 **{p['income']}구간**
+- 소득분위 **{income_label(p['income'])}**
 - 거주지 **{p['region']}** ({p['region_years']}년 이상)
 - 실제 등록금 **{won(p['tuition'])}**
 """
@@ -288,19 +309,20 @@ with st.sidebar:
         st.success(ss.profile_msg)
         ss.profile_msg = None
 
-    with st.expander("✏️ 프로필 직접 수정"):
+    with st.expander("✏️ 내 조건 설정 (프로필 수정)", expanded=True):
         with st.form("profile_form"):
             n_name = st.text_input("이름", p["name"])
             n_univ = st.text_input("대학교", p["univ"])
             n_gpa = st.number_input("학점 (4.5 만점)", 0.0, 4.5, float(p["gpa"]), 0.1)
-            n_inc = st.selectbox("소득분위", INCOME_OPTIONS, index=INCOME_OPTIONS.index(p["income"]))
-            n_reg = st.text_input("거주지", p["region"])
+            n_inc = st.selectbox("소득분위", INCOME_OPTIONS, index=INCOME_OPTIONS.index(p["income"]),
+                                 format_func=income_label)
+            n_reg = st.text_input("거주지", p["region"], placeholder="예) 경기도 용인시")
             n_yrs = st.number_input("거주 기간(년)", 0, 50, int(p["region_years"]))
-            n_tui = st.number_input("실제 등록금(원)", 0, 100_000_000, int(p["tuition"]), 100_000)
-            if st.form_submit_button("저장", use_container_width=True):
+            n_tui = st.number_input("학기 등록금(원)", 0, 100_000_000, int(p["tuition"]), 100_000)
+            if st.form_submit_button("💾 내 조건 저장 및 맞춤 적용", use_container_width=True):
                 ss.profile = dict(name=n_name, univ=n_univ, gpa=float(n_gpa), income=int(n_inc),
                                   region=n_reg, region_years=int(n_yrs), tuition=int(n_tui))
-                ss.profile_msg = "프로필이 저장되어 모든 공고의 적합도가 재계산되었습니다."
+                ss.profile_msg = "✅ 조건이 저장되어 차트·적합도·추천에 즉시 반영되었습니다."
                 st.rerun()
 
     st.markdown("---")
@@ -431,6 +453,7 @@ def render_dashboard():
 def render_explore():
     prof = ss.profile
     st.markdown("### 🔍 장학금 탐색")
+    st.caption("※ 마감일·금액·자격요건은 시연용 예시 데이터입니다. 실제 지원 전 공식 공고를 확인하세요.")
     st.text_input("🔎 검색", key="ex_q",
                   placeholder="장학금 이름·카테고리·자격 키워드 (예: 용인시 인재육성장학금, 성적, 근로, 용인)")
     f1, f2 = st.columns([3, 2])
@@ -439,7 +462,7 @@ def render_explore():
     ss.fit_min = ss.fit_slider
 
     if tuition_covered():
-        st.success("🎓 등록금을 100% 이상 채우셨어요! '등록금성' 공고는 제외하고 생활비성·근로성 장학금을 우선 추천합니다.")
+        st.success("🎓 등록금을 100% 이상 채우셨어요! '등록금성' 공고는 제외하고 생활비성(근로 포함) 장학금을 우선 추천합니다.")
 
     items = visible_scholarships()
     if ss.cat != "전체":
@@ -449,7 +472,7 @@ def render_explore():
         items = [s for s in items if all(t in search_text(s) for t in terms)]
     rows = [(s, evaluate(s, prof)) for s in items]
     rows = [(s, e) for s, e in rows if e["fit"] >= ss.fit_min]
-    # 정렬: 생활비/근로성 우선(등록금 충족 시) → 적합도 ↓ → 마감 임박
+    # 정렬: 생활비성 우선(등록금 충족 시) → 적합도 ↓ → 마감 임박
     cov = tuition_covered()
     rows.sort(key=lambda r: (-(cov and r[0]["kind"] != "등록금성"), -r[1]["fit"], r[0]["deadline"]))
 
