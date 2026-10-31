@@ -2,19 +2,24 @@
 학자금비서 (ScholarSecretary) - 대학생 맞춤형 장학금 관리 & AI 자소서 첨삭 플랫폼
 실행:  pip install streamlit plotly pandas google-genai
        streamlit run app.py
-개발자 Gemini 키:  환경변수 GEMINI_API_KEY 또는 .streamlit/secrets.toml 의 GEMINI_API_KEY
-       키가 없거나 오류가 나면 '안심 데모 분석 리포트'로 자동 전환됩니다.
+개발자 Gemini 키:  .streamlit/secrets.toml 의 GEMINI_API_KEY = "..." 또는 환경변수 GEMINI_API_KEY
+       키가 없거나 네트워크 통신이 불가할 때만 '안심 데모 분석 리포트'로 전환됩니다.
 """
 import calendar
 import io
 import json
+import logging
 import os
 import re
+import time
 from datetime import date, timedelta
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+
+logging.basicConfig(level=logging.INFO)
+LOGGER = logging.getLogger("scholarsecretary")
 
 # ─────────────────────────────────────────────────────────────
 # 0. 페이지 설정 & 테마(CSS)
@@ -135,6 +140,8 @@ def init_state():
     ss.setdefault("cal_month", TODAY.month)
     ss.setdefault("cat", "전체")
     ss.setdefault("ai_report", None)
+    ss.setdefault("ai_error", None)
+    ss.setdefault("ai_log", [])
     ss.setdefault("ocr_msg", None)
     ss.setdefault("profile_msg", None)
 
@@ -495,21 +502,72 @@ def demo_report(title, keywords, essay):
     )
 
 
+# ── Gemini 연동 ────────────────────────────────────────────
+MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
+
+
+class NetworkUnavailable(Exception):
+    """네트워크 통신 자체가 불가능한 경우(이때만 데모 리포트로 전환)."""
+
+
+def clean_key(raw):
+    """공백/개행/따옴표/'GEMINI_API_KEY=' 접두어 오타를 제거. 키 형식(AIzaSy..., AQ... 등)은 검사하지 않는다."""
+    if raw is None:
+        return ""
+    k = str(raw).strip()
+    k = re.sub(r"^(export\s+)?GEMINI_API_KEY\s*=\s*", "", k)
+    k = k.strip().strip("'\"`“”‘’").strip()
+    return re.sub(r"\s+", "", k)
+
+
 def get_api_key():
-    """개발자 키만 사용: st.secrets -> 환경변수 순서."""
+    """개발자 키만 사용: st.secrets["GEMINI_API_KEY"] -> 환경변수 GEMINI_API_KEY 순서."""
     try:
-        key = st.secrets["GEMINI_API_KEY"]
-    except Exception:
+        key = clean_key(st.secrets["GEMINI_API_KEY"])
+    except Exception:  # secrets.toml 없음 / 키 없음
         key = ""
-    return key or os.environ.get("GEMINI_API_KEY", "")
+    return key or clean_key(os.environ.get("GEMINI_API_KEY"))
 
 
-def run_gemini(title, keywords, essay):
-    from google import genai
-    from google.genai import types
+def mask_key(key):
+    return f"{key[:6]}…{key[-4:]}" if len(key) > 12 else "***"
 
-    client = genai.Client(api_key=get_api_key())
-    prompt = "\n".join([
+
+def is_network_error(e):
+    names = " ".join(c.__name__ for c in type(e).__mro__).lower()
+    msg = str(e).lower()
+    name_hits = ("connecterror", "connecttimeout", "readtimeout", "timeout", "connectionerror",
+                 "networkerror", "gaierror", "connectionrefused")
+    msg_hits = ("getaddrinfo", "name or service not known", "temporary failure in name resolution",
+                "connection refused", "network is unreachable", "failed to establish a new connection",
+                "connection error", "timed out")
+    return any(t in names for t in name_hits) or any(t in msg for t in msg_hits)
+
+
+def is_transient(msg):
+    return any(t in msg for t in ("429", "500", "503", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "overloaded"))
+
+
+def explain_error(e, key):
+    msg = str(e).replace(key, "***") if key else str(e)
+    if any(t in msg for t in ("API_KEY_INVALID", "API key not valid", "401", "403",
+                              "PERMISSION_DENIED", "UNAUTHENTICATED")):
+        hint = "API 키가 거부되었습니다. 키를 다시 복사했는지, Google AI Studio에서 키가 활성 상태인지 확인하세요."
+    elif "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+        hint = "API 사용량 한도를 초과했습니다. 잠시 후 다시 시도하세요."
+    elif "404" in msg or "NOT_FOUND" in msg:
+        hint = "사용 가능한 Gemini 모델을 찾지 못했습니다. google-genai 버전을 업데이트해 보세요."
+    elif isinstance(e, RuntimeError) and "설치" in msg:
+        hint = msg
+    elif isinstance(e, ValueError):
+        hint = "Gemini 응답을 해석하지 못했습니다. 다시 시도해 주세요."
+    else:
+        hint = "Gemini 호출 중 오류가 발생했습니다."
+    return f"{hint}\n\n상세: {type(e).__name__}: {msg[:300]}"
+
+
+def build_prompt(title, keywords, essay):
+    return "\n".join([
         "당신은 장학금 자기소개서 첨삭 전문가입니다.",
         "장학금 공고: " + title,
         "참고 키워드 후보: " + ", ".join(keywords),
@@ -521,14 +579,112 @@ def run_gemini(title, keywords, essay):
         '"strengths": ["강점 피드백 2~3개"], '
         '"improvements": ["수치화/구체화 보완 가이드 3개"]}',
     ])
-    resp = client.models.generate_content(
-        model="gemini-2.5-flash", contents=prompt,
-        config=types.GenerateContentConfig(response_mime_type="application/json"))
-    data = json.loads(resp.text)
-    assert all(k in data for k in ("keywords", "strengths", "improvements"))
-    data["keywords"] = list(data["keywords"])[:3]
-    data["source"] = "Gemini AI 분석"
+
+
+def call_model(key, model, prompt):
+    """최신 google-genai 우선, 없으면 구버전 google-generativeai 사용."""
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError:
+        genai = None
+    if genai is not None:
+        client = genai.Client(api_key=key)
+        resp = client.models.generate_content(
+            model=model, contents=prompt,
+            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.4))
+        return resp.text
+    try:
+        import google.generativeai as legacy
+    except ImportError:
+        raise RuntimeError("Gemini SDK 미설치: pip install google-genai")
+    legacy.configure(api_key=key)
+    resp = legacy.GenerativeModel(model).generate_content(
+        prompt, generation_config={"response_mime_type": "application/json", "temperature": 0.4})
+    return resp.text
+
+
+def parse_report(text):
+    if not text:
+        raise ValueError("빈 응답")
+    t = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.M).strip()
+    a, b = t.find("{"), t.rfind("}")
+    if a < 0 or b <= a:
+        raise ValueError("JSON 형식 아님")
+    data = json.loads(t[a:b + 1])
+    for k in ("keywords", "strengths", "improvements"):
+        if not isinstance(data.get(k), list) or not data[k]:
+            raise ValueError(f"'{k}' 항목 누락")
+        data[k] = [str(x) for x in data[k]]
+    data["keywords"] = data["keywords"][:3]
     return data
+
+
+def run_gemini(title, keywords, essay, trace):
+    """모델 폴백 + 재시도. 네트워크 불가 시에만 NetworkUnavailable, 그 외 오류는 그대로 raise."""
+    key = get_api_key()
+    prompt = build_prompt(title, keywords, essay)
+    last_err = None
+    for model in MODELS:
+        for attempt in (1, 2):
+            try:
+                trace.append(f"[호출] 모델={model} 시도={attempt}")
+                data = parse_report(call_model(key, model, prompt))
+                data["source"] = f"Gemini AI 분석 ({model})"
+                trace.append("[성공] 실제 Gemini 응답을 사용합니다.")
+                return data
+            except Exception as e:
+                last_err = e
+                msg = str(e).replace(key, "***")
+                trace.append(f"[실패] {type(e).__name__}: {msg[:200]}")
+                LOGGER.warning("Gemini 호출 실패 model=%s attempt=%s key=%s: %s: %s",
+                               model, attempt, mask_key(key), type(e).__name__, msg[:300])
+                if isinstance(e, RuntimeError) and "설치" in msg:
+                    raise
+                if is_network_error(e):
+                    if attempt == 1:
+                        time.sleep(1)
+                        continue
+                    raise NetworkUnavailable(msg) from e
+                if "404" in msg or "NOT_FOUND" in msg:
+                    break  # 다음 모델로
+                if is_transient(msg):
+                    time.sleep(1.5 * attempt)
+                    continue
+                if isinstance(e, ValueError):
+                    if attempt == 1:
+                        continue
+                    break
+                raise  # 키 거부(401/403) 등은 즉시 사용자에게 안내
+    raise last_err or RuntimeError("모델 호출 실패")
+
+
+def generate_report(title, kws, essay):
+    trace, report = [], None
+    ss.ai_error = None
+    key = get_api_key()
+    with st.spinner("분석 중..."):
+        if not key:
+            trace.append("API 키 없음: st.secrets / 환경변수 GEMINI_API_KEY 모두 비어 있음 → 데모 리포트")
+            report = demo_report(title, kws, essay)
+            report["source"] = "안심 데모 분석 리포트 (API 키 미설정)"
+        else:
+            trace.append(f"API 키 인식: {mask_key(key)} (길이 {len(key)})")
+            if not re.fullmatch(r"[A-Za-z0-9_\-.~]{10,}", key):
+                trace.append("주의: 키에 예상 밖의 문자가 있습니다. 그래도 호출을 시도합니다.")
+            try:
+                report = run_gemini(title, kws, essay, trace)
+            except NetworkUnavailable:
+                trace.append("네트워크 통신 불가 → 데모 리포트")
+                report = demo_report(title, kws, essay)
+                report["source"] = "안심 데모 분석 리포트 (네트워크 통신 불가)"
+            except Exception as e:
+                LOGGER.exception("Gemini 분석 실패")
+                ss.ai_error = explain_error(e, key)
+    ss.ai_log = trace
+    if report:
+        report["title"] = title
+    ss.ai_report = report
 
 
 def render_ai():
@@ -557,17 +713,15 @@ def render_ai():
                 unsafe_allow_html=True)
 
     if st.button("🤖 AI 첨삭 받기", type="primary", disabled=not (essay.strip() and title.strip())):
-        with st.spinner("분석 중..."):
-            try:
-                if not get_api_key():
-                    raise RuntimeError("API key not set")
-                ss.ai_report = run_gemini(title, kws, essay)
-            except Exception:
-                ss.ai_report = demo_report(title, kws, essay)
-                ss.ai_report["source"] = "안심 데모 분석 리포트 (API 키 미설정 또는 네트워크 오류)"
-        ss.ai_report["title"] = title
+        generate_report(title, kws, essay)
     if not (essay.strip() and title.strip()):
         st.caption("장학금과 자기소개서 내용을 입력하면 버튼이 활성화됩니다.")
+
+    if ss.ai_error:
+        st.error(ss.ai_error)
+    if ss.ai_log:
+        with st.expander("🛠️ 디버그 로그"):
+            st.code("\n".join(ss.ai_log))
 
     r = ss.ai_report
     if r:
